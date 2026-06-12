@@ -51,7 +51,9 @@ NVIDIA_API_KEY=您的NVIDIA_NIM金鑰
 由於 GitHub Actions 的單次 Job 運行有 6 小時上限，且不適合無窮 `while True` 循環，我們提供**排程掃描（Cron Job）**與 **VPS 虛擬主機常駐** 兩種雲端方案：
 
 ### 方案 A：使用 GitHub Actions 排程掃描 (完全免費)
-您可以將系統配置為「每 5 分鐘自動啟動掃描一次，執行完畢即關閉」，這完全契合 GitHub 的免費額度。
+您可以將系統配置為「每 5 分鐘自動啟動掃描一次，執行完畢即關閉」。
+> [!TIP]
+> **額度說明**：當您將此 GitHub 倉庫設定為 **Public (公開)** 時，GitHub Actions 定時任務的執行時間為**完全免費且無上限**！若設定為 Private，則每月有 2,000 分鐘的免費額度上限。
 
 #### 1. 設定 GitHub Secrets (安全保護金鑰)
 不要將 `.env` 檔案上傳到 GitHub！請在您的 GitHub 項目倉庫中：
@@ -68,9 +70,13 @@ name: TSADS Live Anomaly Monitor
 
 on:
   schedule:
-    # 每 5 分鐘自動執行一次 (GitHub 允許的最小間隔)
+    # 全天候 24 小時監控：每 5 分鐘自動掃描一次。
+    # 因為專案已設為 Public (公開) 倉庫，GitHub Actions 的執行時間為完全免費且無上限！
     - cron: '*/5 * * * *'
   workflow_dispatch: # 支持手動點擊觸發
+
+permissions:
+  contents: write
 
 jobs:
   monitor:
@@ -91,16 +97,26 @@ jobs:
 
     - name: Run Scan Job
       env:
-        # 將 GitHub Secrets 注入為系統環境變數
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-        # 覆寫為只跑一次的模式，不進行無窮循環
-        TSADS_ONCE_MODE: "true" 
+        TSADS_ONCE_MODE: "true"
+        # 手動點擊觸發時會強制發送一則 Telegram 測試通知確認連通
+        TSADS_TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
       run: |
         python src/main_monitor.py
+
+    - name: Commit and Push state changes
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        if [ -f processed_state.json ]; then
+          git add processed_state.json
+          git commit -m "Update processed state data [skip ci]" || echo "No changes to commit"
+          git push
+        fi
 ```
-*(注意：我們的主程序 `main_monitor.py` 在偵測到 `TSADS_ONCE_MODE="true"` 環境變數時，會自動只掃描一輪後便結束退出，非常適合 GitHub Actions 運行。)*
+*(注意：我們的主程序 `main_monitor.py` 在偵測到 `TSADS_ONCE_MODE="true"` 環境變數時，會自動只掃描一輪後便結束退出，且最後的 Commit step 會自動將 `processed_state.json` 的已處理 ID 回傳儲存到 GitHub，保證在無狀態雲端環境下也不會重複警報。)*
 
 ### 方案 B：使用 Linux 雲端主機 (VPS) 常駐運行
 如果您有阿里雲、AWS 或 GCP 等 Linux 虛擬主機：
