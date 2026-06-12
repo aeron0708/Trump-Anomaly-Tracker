@@ -2,7 +2,8 @@ name: TSADS Live Anomaly Monitor
 
 on:
   schedule:
-    # 每 5 分鐘自動執行一次 (GitHub 允許的最小間隔)
+    # 全天候 24 小時監控：每 5 分鐘自動掃描一次。
+    # 因為專案已設為 Public (公開) 倉庫，GitHub Actions 的執行時間為完全免費且無上限！
     - cron: '*/5 * * * *'
   workflow_dispatch: # 支持手動點擊觸發
 
