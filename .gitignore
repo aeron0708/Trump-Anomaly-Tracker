@@ -1,0 +1,24 @@
+# Local env configurations (sensitive keys)
+.env
+
+# SQLite databases (local trade history)
+*.db
+tsads_history.db
+
+# Python compilation and cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Raw historical data and logs
+raw_data/
+logs/
+*.log
+
+# Windows specific
+Thumbs.db
+ehthumbs.db
+Desktop.ini
