@@ -90,17 +90,36 @@ def start_monitoring():
                 # Load into engine history quietly for alignment engine context
                 engine.option_history.append(opt)
                 
-        # Save baseline if no state file existed
-        if not has_state:
+        # Save baseline or send test alert if test mode is enabled
+        is_test_mode = os.environ.get("TSADS_TEST_MODE") == "true"
+        if not has_state or is_test_mode:
             try:
-                with open(state_path, "w", encoding="utf-8") as f:
-                    json.dump({
-                        "post_ids": list(processed_post_ids),
-                        "option_ids": list(processed_option_ids)
-                    }, f, ensure_ascii=False, indent=2)
-                print(f"[TSADS] 首次 Warmup 狀態已儲存至 {state_path}")
+                if not has_state:
+                    with open(state_path, "w", encoding="utf-8") as f:
+                        json.dump({
+                            "post_ids": list(processed_post_ids),
+                            "option_ids": list(processed_option_ids)
+                        }, f, ensure_ascii=False, indent=2)
+                    print(f"[TSADS] 首次 Warmup 狀態已儲存至 {state_path}")
+                
+                # Send test notification
+                run_env = "GitHub Actions (手動測試)" if is_test_mode else "GitHub Actions (首次啟動)"
+                test_msg = f"📢 [TSADS] 雲端監控程序連線測試成功！\n\n■ 運行環境: {run_env}\n■ 追蹤標的: SPY, QQQ, DJT, TLT, GLD, USO\n■ 目前狀態: 正常運行中（共緩存 {len(engine.post_history)} 貼文與 {len(engine.option_history)} 筆期權數據）。\n\n系統已成功與您的 Telegram 頻道對接，後續若偵測到川普發言與期權異常共振，將在此即時警報！"
+                
+                if engine.tg_token and engine.tg_chat_id:
+                    import urllib.request
+                    import urllib.parse
+                    tg_url = f"https://api.telegram.org/bot{engine.tg_token}/sendMessage"
+                    data = urllib.parse.urlencode({
+                        "chat_id": engine.tg_chat_id,
+                        "text": test_msg
+                    }).encode("utf-8")
+                    req = urllib.request.Request(tg_url, data=data)
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        if response.status == 200:
+                            print("[TSADS] 成功發送 Telegram 連線測試通知。")
             except Exception as se:
-                print(f"[TSADS] 儲存 Warmup 狀態檔失敗: {se}")
+                print(f"[TSADS] 儲存 Warmup 狀態檔或發送測試通知失敗: {se}")
                 
         print(f"[TSADS] 基線載入完成。已緩存 {len(engine.post_history)} 則推文與 {len(engine.option_history)} 筆期權數據於分析引擎中。")
     except Exception as e:
