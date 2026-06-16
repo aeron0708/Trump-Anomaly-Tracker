@@ -78,8 +78,7 @@ def start_monitoring():
     try:
         initial_posts = monitor.fetch_latest_posts(mock=False)
         for post in initial_posts:
-            if not has_state:
-                processed_post_ids.add(post["id"])
+            processed_post_ids.add(post["id"])
             # Load into engine history quietly for alignment engine context
             post_an = monitor.analyze_post(post["text"])
             engine.post_history.append(post_an)
@@ -93,8 +92,7 @@ def start_monitoring():
                 opt["is_anomaly"] = score_res["is_anomaly"]
                 opt["score_details"] = score_res["score_details"]
                 
-                if not has_state:
-                    processed_option_ids.add(opt["id"])
+                processed_option_ids.add(opt["id"])
                 # Load into engine history quietly for alignment engine context
                 engine.option_history.append(opt)
                 
