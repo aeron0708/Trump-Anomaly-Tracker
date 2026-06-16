@@ -22,6 +22,7 @@ if sys.platform.startswith('win'):
 from truth_social_monitor import TruthSocialMonitor
 from yfinance_options_scanner import YFinanceOptionsScanner
 from alert_alignment_engine import AlertAlignmentEngine
+from options_anomaly_detector import OptionsAnomalyDetector
 
 def load_dotenv():
     paths = [".env", "Trump_Anomaly_Tracker/.env", "../.env", "src/.env"]
@@ -51,6 +52,7 @@ def start_monitoring():
     monitor = TruthSocialMonitor(use_llm=True)
     # Scan SPY, QQQ, DJT, TLT with Vol/OI >= 2.0 and Premium >= $100k
     scanner = YFinanceOptionsScanner(min_vol_oi=2.0, min_premium=100000.0, max_dte=7)
+    detector = OptionsAnomalyDetector(threshold=7.0)
     engine = AlertAlignmentEngine(db_path="tsads_history.db")
     
     # Track processed items to avoid double alerts
@@ -85,6 +87,12 @@ def start_monitoring():
         for ticker in ["SPY", "QQQ", "DJT", "TLT", "GLD", "USO"]:
             initial_options = scanner.scan_ticker(ticker)
             for opt in initial_options:
+                # Calculate and attach anomaly score
+                score_res = detector.calculate_anomaly_score(opt)
+                opt["anomaly_score"] = score_res["anomaly_score"]
+                opt["is_anomaly"] = score_res["is_anomaly"]
+                opt["score_details"] = score_res["score_details"]
+                
                 if not has_state:
                     processed_option_ids.add(opt["id"])
                 # Load into engine history quietly for alignment engine context
@@ -156,6 +164,13 @@ def start_monitoring():
                 for opt in anomalies:
                     if opt["id"] not in processed_option_ids:
                         print(f"\n[{current_time}] 偵測到 {ticker} 期權異常交易! Contract: {opt['contract']}")
+                        
+                        # Calculate and attach anomaly score
+                        score_res = detector.calculate_anomaly_score(opt)
+                        opt["anomaly_score"] = score_res["anomaly_score"]
+                        opt["is_anomaly"] = score_res["is_anomaly"]
+                        opt["score_details"] = score_res["score_details"]
+                        
                         engine.process_new_option_anomaly(opt)
                         processed_option_ids.add(opt["id"])
                         new_option_detected = True
@@ -188,6 +203,9 @@ def start_monitoring():
             break
         except Exception as e:
             print(f"\n[TSADS] 運行時異常: {e}. 5秒後重新嘗試...")
+            if os.environ.get("TSADS_ONCE_MODE") == "true":
+                print("[TSADS] 偵測到單次運行模式 (Once Mode) 發生異常。安全退出以避免無限重試。")
+                sys.exit(1)
             time.sleep(5)
 
 if __name__ == "__main__":
