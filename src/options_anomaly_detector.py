@@ -85,7 +85,9 @@ class OptionsAnomalyDetector:
         details["Premium_Factor"] = w_premium
 
         # 3. DTE Factor (Max: 2.5)
-        if dte == 0:
+        if dte < 0:
+            w_dte = 0.0  # Expired contracts should not trigger anomalies
+        elif dte == 0:
             w_dte = 2.5
         elif dte <= 1:
             w_dte = 2.0

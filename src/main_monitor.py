@@ -21,6 +21,7 @@ if sys.platform.startswith('win'):
 # Import TSADS v2.1 components
 from truth_social_monitor import TruthSocialMonitor
 from yfinance_options_scanner import YFinanceOptionsScanner
+from moomoo_options_scanner import MoomooOptionsScanner
 from alert_alignment_engine import AlertAlignmentEngine
 from options_anomaly_detector import OptionsAnomalyDetector
 
@@ -51,7 +52,8 @@ def start_monitoring():
     # Initialize components
     monitor = TruthSocialMonitor(use_llm=True)
     # Scan SPY, QQQ, DJT, TLT with Vol/OI >= 2.0 and Premium >= $100k
-    scanner = YFinanceOptionsScanner(min_vol_oi=2.0, min_premium=100000.0, max_dte=7)
+    moomoo_scanner = MoomooOptionsScanner(min_vol_oi=2.0, min_premium=100000.0, max_dte=7)
+    yf_scanner = YFinanceOptionsScanner(min_vol_oi=2.0, min_premium=100000.0, max_dte=7)
     detector = OptionsAnomalyDetector(threshold=7.0)
     engine = AlertAlignmentEngine(db_path="tsads_history.db")
     
@@ -84,7 +86,11 @@ def start_monitoring():
             engine.post_history.append(post_an)
             
         for ticker in ["SPY", "QQQ", "DJT", "TLT", "GLD", "USO"]:
-            initial_options = scanner.scan_ticker(ticker)
+            try:
+                initial_options = moomoo_scanner.scan_ticker(ticker)
+            except Exception as e:
+                print(f"[TSADS] Moomoo Scanner failed for {ticker}: {e}. Falling back to YFinance.")
+                initial_options = yf_scanner.scan_ticker(ticker)
             for opt in initial_options:
                 # Calculate and attach anomaly score
                 score_res = detector.calculate_anomaly_score(opt)
@@ -158,7 +164,11 @@ def start_monitoring():
             # 2. Fetch & Process Options Chain
             new_option_detected = False
             for ticker in ["SPY", "QQQ", "DJT", "TLT", "GLD", "USO"]:
-                anomalies = scanner.scan_ticker(ticker)
+                try:
+                    anomalies = moomoo_scanner.scan_ticker(ticker)
+                except Exception as e:
+                    print(f"\n[{current_time}] [TSADS] Moomoo Scanner failed for {ticker}: {e}. Falling back to YFinance.")
+                    anomalies = yf_scanner.scan_ticker(ticker)
                 for opt in anomalies:
                     if opt["id"] not in processed_option_ids:
                         print(f"\n[{current_time}] 偵測到 {ticker} 期權異常交易! Contract: {opt['contract']}")
