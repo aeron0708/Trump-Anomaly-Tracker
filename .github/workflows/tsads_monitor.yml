@@ -25,13 +25,14 @@ jobs:
 
     - name: Install dependencies
       run: |
-        pip install yfinance
+        pip install yfinance google-genai
 
     - name: Run Scan Job
       env:
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         TSADS_ONCE_MODE: "true"
         TSADS_TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
       run: |
