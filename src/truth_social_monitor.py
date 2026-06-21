@@ -7,14 +7,14 @@ using either NVIDIA NIM (Meta Llama 3.1 8B) or Gemini API (v2.5 Flash), or rule 
 
 import os
 import re
-import xml.etree.ElementTree as ET
+import html
 from datetime import datetime
 import urllib.request
 import json
 
 # Dynamic Import for Gemini API (Fallback)
 try:
-    import google.generativeai as genai
+    from google import genai
     HAS_GEMINI = True
 except ImportError:
     HAS_GEMINI = False
@@ -49,8 +49,7 @@ class TruthSocialMonitor:
                 print(f"[TSADS] NVIDIA NIM mode active (Model: {self.nim_model}).")
             elif self.gemini_api_key and HAS_GEMINI:
                 try:
-                    genai.configure(api_key=self.gemini_api_key)
-                    self.gemini_model = genai.GenerativeModel('gemini-2.5-flash')
+                    self.gemini_client = genai.Client(api_key=self.gemini_api_key)
                     self.engine_mode = "GEMINI"
                     print("[TSADS] Gemini API mode active.")
                 except Exception as e:
@@ -63,45 +62,53 @@ class TruthSocialMonitor:
     def fetch_latest_posts(self, username="realdonaldtrump", mock=False):
         """
         Fetches latest posts from Truth Social.
-        If mock=True or HTTP fails, returns mock data for testing.
+        If mock=True, returns mock data for testing.
         """
         if mock:
             return self._get_mock_posts()
             
-        rss_url = f"https://truthsocial.com/@{username}.rss"
-        print(f"[TSADS] Attempting to fetch posts from: {rss_url}")
+        lookup_url = f"https://truthsocial.com/api/v1/accounts/lookup?acct={username}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+        }
         
         try:
-            req = urllib.request.Request(
-                rss_url, 
-                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            )
+            # 1. Get user ID
+            req = urllib.request.Request(lookup_url, headers=headers)
             with urllib.request.urlopen(req, timeout=10) as response:
-                xml_data = response.read()
+                user_data = json.loads(response.read().decode("utf-8"))
+                user_id = user_data.get("id")
                 
-            # Parse RSS XML
-            root = ET.fromstring(xml_data)
+            if not user_id:
+                print(f"[TSADS] Could not find user id for {username}.")
+                return []
+                
+            # 2. Get posts
+            statuses_url = f"https://truthsocial.com/api/v1/accounts/{user_id}/statuses"
+            req2 = urllib.request.Request(statuses_url, headers=headers)
+            with urllib.request.urlopen(req2, timeout=10) as response2:
+                statuses_data = json.loads(response2.read().decode("utf-8"))
+                
             posts = []
-            for item in root.findall('.//item'):
-                title = item.find('title').text if item.find('title') is not None else ""
-                description = item.find('description').text if item.find('description') is not None else ""
-                pub_date = item.find('pubDate').text if item.find('pubDate') is not None else ""
-                link = item.find('link').text if item.find('link') is not None else ""
-                
-                # Clean HTML tags from description if needed
-                clean_text = re.sub('<[^<]+?>', '', description)
+            for item in statuses_data:
+                content_html = item.get("content", "")
+                # Clean HTML tags from content
+                clean_text = re.sub('<[^<]+?>', '', content_html)
+                clean_text = html.unescape(clean_text)
                 
                 posts.append({
-                    "id": link.split('/')[-1] if link else str(hash(title)),
-                    "text": clean_text if clean_text else title,
-                    "timestamp": pub_date,
-                    "link": link
+                    "id": item.get("id", str(hash(clean_text))),
+                    "text": clean_text,
+                    "timestamp": item.get("created_at", ""),
+                    "link": item.get("url", "")
                 })
+                
             print(f"[TSADS] Successfully fetched {len(posts)} live posts.")
             return posts
         except Exception as e:
-            print(f"[TSADS] Failed to fetch live RSS ({e}). Falling back to mock data for demonstration.")
-            return self._get_mock_posts()
+            print(f"[TSADS] Failed to fetch live posts via API ({e}). Returning empty list to avoid mock data loop.")
+            return []
 
     def analyze_post(self, post_text):
         """
@@ -182,7 +189,7 @@ class TruthSocialMonitor:
         "{post_text}"
         """
         try:
-            response = self.gemini_model.generate_content(prompt)
+            response = self.gemini_client.models.generate_content(model='gemini-2.5-flash', contents=prompt)
             result_text = response.text.strip()
             
             # Clean possible markdown JSON wrappers

@@ -106,8 +106,8 @@ class AlertAlignmentEngine:
                 return alert
                 
         if not matched:
-            # Check if standalone anomaly score is high (e.g. >= 8.0)
-            if score >= 8.0:
+            # Check if standalone anomaly score is high (e.g. >= 9.0)
+            if score >= 9.0:
                 alert = self._create_standalone_alert(opt_anomaly)
                 self.dispatch_alert(alert, level="YELLOW")
                 return alert
