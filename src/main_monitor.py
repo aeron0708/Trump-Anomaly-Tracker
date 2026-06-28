@@ -41,6 +41,13 @@ def load_dotenv():
             except Exception:
                 pass
 
+def is_in_monitoring_window():
+    now = datetime.now()
+    hour = now.hour
+    if hour >= 14 or hour < 8:
+        return True
+    return False
+
 def start_monitoring():
     load_dotenv()
     
@@ -146,6 +153,12 @@ def start_monitoring():
     
     while True:
         try:
+            if not is_in_monitoring_window() and os.environ.get("TSADS_ONCE_MODE") != "true":
+                current_time = datetime.now().strftime("%H:%M:%S")
+                print(f"\r[{current_time}] 目前非監控時段 (14:00 - 08:00)。進入休眠，將在 5 分鐘後重新檢查...", end="", flush=True)
+                time.sleep(300)
+                continue
+                
             loop_count += 1
             current_time = datetime.now().strftime("%H:%M:%S")
             print(f"\r[{current_time}] 執行第 {loop_count} 次掃描中...", end="", flush=True)
