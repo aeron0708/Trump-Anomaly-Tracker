@@ -74,18 +74,18 @@ def start_monitoring():
             has_state = True
         except Exception as e:
             print(f"[TSADS] 載入狀態檔失敗，將重新執行 Warmup: {e}")
-    
     # Warmup / Initial load to populate history without spamming old alerts
     print("[TSADS] 系統初始化中，載入基線歷史數據...")
     try:
         initial_posts = monitor.fetch_latest_posts(mock=False)
         for post in initial_posts:
-            processed_post_ids.add(post["id"])
+            if not has_state:
+                processed_post_ids.add(post["id"])
             # Load into engine history quietly for alignment engine context
             post_an = monitor.analyze_post(post["text"])
             engine.post_history.append(post_an)
             
-        for ticker in ["SPY", "QQQ", "DJT", "TLT", "GLD", "USO"]:
+        for ticker in ["SPY", "QQQ", "TLT", "GLD", "USO"]:
             try:
                 initial_options = moomoo_scanner.scan_ticker(ticker)
             except Exception as e:
@@ -98,7 +98,8 @@ def start_monitoring():
                 opt["is_anomaly"] = score_res["is_anomaly"]
                 opt["score_details"] = score_res["score_details"]
                 
-                processed_option_ids.add(opt["id"])
+                if not has_state:
+                    processed_option_ids.add(opt["id"])
                 # Load into engine history quietly for alignment engine context
                 engine.option_history.append(opt)
                 
@@ -116,7 +117,7 @@ def start_monitoring():
                 
                 # Send test notification
                 run_env = "GitHub Actions (手動測試)" if is_test_mode else "GitHub Actions (首次啟動)"
-                test_msg = f"📢 [TSADS] 雲端監控程序連線測試成功！\n\n■ 運行環境: {run_env}\n■ 追蹤標的: SPY, QQQ, DJT, TLT, GLD, USO\n■ 目前狀態: 正常運行中（共緩存 {len(engine.post_history)} 貼文與 {len(engine.option_history)} 筆期權數據）。\n\n系統已成功與您的 Telegram 頻道對接，後續若偵測到川普發言與期權異常共振，將在此即時警報！"
+                test_msg = f"📢 [TSADS] 雲端監控程序連線測試成功！\n\n■ 運行環境: {run_env}\n■ 追蹤標的: SPY, QQQ, TLT, GLD, USO\n■ 目前狀態: 正常運行中（共緩存 {len(engine.post_history)} 貼文與 {len(engine.option_history)} 筆期權數據）。\n\n系統已成功與您的 Telegram 頻道對接，後續若偵測到川普發言與期權異常共振，將在此即時警報！"
                 
                 if engine.tg_token and engine.tg_chat_id:
                     import urllib.request
@@ -136,7 +137,7 @@ def start_monitoring():
         print(f"[TSADS] 基線載入完成。已緩存 {len(engine.post_history)} 則推文與 {len(engine.option_history)} 筆期權數據於分析引擎中。")
     except Exception as e:
         print(f"[TSADS] 初始化警告 (可能因網絡離線): {e}")
-
+ 
     loop_count = 0
     scan_interval = 60 # 60 seconds interval
     
@@ -163,7 +164,8 @@ def start_monitoring():
             
             # 2. Fetch & Process Options Chain
             new_option_detected = False
-            for ticker in ["SPY", "QQQ", "DJT", "TLT", "GLD", "USO"]:
+            new_anomalies_batch = []
+            for ticker in ["SPY", "QQQ", "TLT", "GLD", "USO"]:
                 try:
                     anomalies = moomoo_scanner.scan_ticker(ticker)
                 except Exception as e:
@@ -179,9 +181,12 @@ def start_monitoring():
                         opt["is_anomaly"] = score_res["is_anomaly"]
                         opt["score_details"] = score_res["score_details"]
                         
-                        engine.process_new_option_anomaly(opt)
+                        new_anomalies_batch.append(opt)
                         processed_option_ids.add(opt["id"])
                         new_option_detected = True
+            
+            if new_anomalies_batch:
+                engine.process_new_anomalies_grouped(new_anomalies_batch)
             
             # Save state if any new items were processed
             if new_post_detected or new_option_detected:

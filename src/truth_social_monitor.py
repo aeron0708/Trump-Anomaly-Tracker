@@ -24,13 +24,13 @@ KEYWORD_SECTOR_MAP = {
     # Sector: (Keywords, Primary Impact Direction)
     "Automotive": (["auto", "car", "vehicle", "toyota", "ford", "gm", "ev", "tesla"], "NEGATIVE"),
     "Semiconductors": (["chip", "semiconductor", "tsmc", "nvidia", "intel", "taiwan"], "NEGATIVE"),
-    "Steel & Metals": (["steel", "aluminum", "metal", "tariff", "tariffs"], "NEGATIVE"),
+    "Steel & Metals": (["steel", "aluminum", "metal", "tariff", "tariffs", "trade war", "sanctions"], "NEGATIVE"),
     "Energy & Oil": (["oil", "gas", "drill", "pipeline", "fracking", "energy", "petroleum"], "POSITIVE"),
     "Cryptocurrency": (["bitcoin", "btc", "crypto", "ethereum", "eth", "coin", "solana"], "POSITIVE"),
-    "Defense": (["military", "defense", "weapon", "defense spending", "nato", "war", "pentagon"], "POSITIVE"),
-    "Financials": (["bank", "financial", "fed", "deregulation"], "POSITIVE"),
-    "Bonds & Rates": (["rate", "rates", "interest rate", "inflation"], "NEGATIVE"),
-    "China-Exposure": (["china", "chinese", "beijing", "xi", "tariff", "tariffs"], "NEGATIVE"),
+    "Defense": (["military", "defense", "weapon", "defense spending", "nato", "war", "warfare", "conflict", "combat", "army", "navy", "air force", "pentagon"], "POSITIVE"),
+    "Financials": (["bank", "financial", "fed", "deregulation", "invest", "equity", "stake", "merger", "acquisition"], "POSITIVE"),
+    "Bonds & Rates": (["rate", "rates", "interest rate", "inflation", "cpi", "ppi", "yield", "rate cut", "rate hike", "fed rate"], "NEGATIVE"),
+    "China-Exposure": (["china", "chinese", "beijing", "xi", "tariff", "tariffs", "trade war", "sanctions"], "NEGATIVE"),
 }
 
 class TruthSocialMonitor:
@@ -126,9 +126,11 @@ class TruthSocialMonitor:
         Calls NVIDIA NIM API to perform semantic extraction and sentiment scoring.
         """
         prompt = f"""
-        You are a financial market analyzer. Analyze the following social media post from Donald Trump.
+        You are an elite financial market quant analyzer. Analyze the following social media post from Donald Trump.
         Determine:
         1. Whether the text contains potential stock market or sector-specific impacts (Yes/No).
+           CRITICAL RULE: Set has_impact to 'Yes' ONLY if the post contains specific, concrete policy declarations, direct threats (e.g. tariffs, trade wars, sanctions), trade negotiations, direct comments on interest rates, inflation, Federal Reserve policy, geopolitical conflicts/wars, or direct investments/stakes/mergers in companies/sectors.
+           If the post is general bragging (e.g. 'BEST ECONOMY EVER'), generic political backing/endorsements of congressmen/candidates, daily greetings, or personal attacks, classify has_impact as 'No' and confidence as low.
         2. The primary sectors affected (e.g., Automotive, Semiconductors, Steel & Metals, Energy & Oil, Cryptocurrency, Defense, Financials, China-Exposure, Bonds & Rates, Safe-Haven & Gold).
         3. The sentiment/impact direction for the affected sectors (POSITIVE / NEGATIVE / NEUTRAL).
         4. The implied trading vehicle direction (CALL / PUT / NONE).
@@ -174,9 +176,11 @@ class TruthSocialMonitor:
         Calls Gemini API to perform semantic extraction and sentiment scoring.
         """
         prompt = f"""
-        You are a financial market analyzer. Analyze the following social media post from Donald Trump.
+        You are an elite financial market quant analyzer. Analyze the following social media post from Donald Trump.
         Determine:
         1. Whether the text contains potential stock market or sector-specific impacts (Yes/No).
+           CRITICAL RULE: Set has_impact to 'Yes' ONLY if the post contains specific, concrete policy declarations, direct threats (e.g. tariffs, trade wars, sanctions), trade negotiations, direct comments on interest rates, inflation, Federal Reserve policy, geopolitical conflicts/wars, or direct investments/stakes/mergers in companies/sectors.
+           If the post is general bragging (e.g. 'BEST ECONOMY EVER'), generic political backing/endorsements of congressmen/candidates, daily greetings, or personal attacks, classify has_impact as 'No' and confidence as low.
         2. The primary sectors affected (e.g., Automotive, Semiconductors, Steel & Metals, Energy & Oil, Cryptocurrency, Defense, Financials, China-Exposure, Bonds & Rates, Safe-Haven & Gold).
         3. The sentiment/impact direction for the affected sectors (POSITIVE / NEGATIVE / NEUTRAL).
         4. The implied trading vehicle direction (CALL / PUT / NONE).

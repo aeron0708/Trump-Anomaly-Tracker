@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-TSADS - Alert Alignment Engine (v2.1)
+TSADS - Alert Alignment Engine (v2.3)
 Aligns options anomalies with social media posts, executing cross-validation,
 calculating Greeks-hedged option spreads, logging to SQLite, and sending Telegram alerts.
-Now includes TLT (Bond) resonance as a signal boost and extra alert warning.
+Supports HTML formatting, keyword tagging (war, trade war, tariffs, inflation, rates, etc.),
+consolidation of alerts, and removal of DJT.
 """
 
 from datetime import datetime, timedelta
@@ -12,8 +13,9 @@ import urllib.parse
 import json
 import sys
 import os
+import html
 
-# Reconfigure stdout to UTF-8 on Windows if possible to support emojis and Unicode symbols
+# Reconfigure stdout to UTF-8 on Windows if possible
 if sys.platform.startswith('win'):
     try:
         sys.stdout.reconfigure(encoding='utf-8')
@@ -34,7 +36,6 @@ class AlertAlignmentEngine:
         self.option_history = []
         self.alignment_window_minutes = 30
         
-        # Initialize TSADS v2.0 managers
         self.db_logger = SQLiteLogger(db_path)
         self.pos_manager = PositionManager(account_value=100000.0)
 
@@ -45,7 +46,6 @@ class AlertAlignmentEngine:
         mapping = {
             "SPY": ["General Market", "Automotive", "Semiconductors", "Steel & Metals", "China-Exposure"],
             "QQQ": ["General Market", "Semiconductors", "China-Exposure"],
-            "DJT": ["General Market", "Financials"],
             "USO": ["Energy & Oil"],
             "BTC": ["Cryptocurrency"],
             "ETH": ["Cryptocurrency"],
@@ -57,11 +57,11 @@ class AlertAlignmentEngine:
     def process_new_post(self, post_analysis):
         """
         Saves a new post analysis, logs to SQLite, and checks for matching option anomalies in history.
+        Consolidates alerts by ticker and direction.
         """
         self.post_history.append(post_analysis)
         self._clean_expired_history()
         
-        # TSADS v2.0: Log post to SQLite
         self.db_logger.log_post(post_analysis)
         
         print(f"[TSADS Engine] Processed Truth Social Post. Sectors: {post_analysis['sectors']} | Direction: {post_analysis['trading_direction']}")
@@ -69,49 +69,63 @@ class AlertAlignmentEngine:
         if not post_analysis.get("has_impact", False):
             return None
             
-        alignments = []
-        # Look for matching options in history
+        # Group matching options in history by (ticker, direction)
+        matched_opts = {}
         for opt in self.option_history:
             if self._are_aligned(post_analysis, opt):
-                alert = self._create_aligned_alert(post_analysis, opt)
-                alignments.append(alert)
-                self.dispatch_alert(alert, level="RED")
+                key = (opt["ticker"].upper(), opt["direction"].upper())
+                if key not in matched_opts:
+                    matched_opts[key] = []
+                matched_opts[key].append(opt)
                 
+        alignments = []
+        for (ticker, direction), opt_list in matched_opts.items():
+            alert = self._create_aligned_alert_grouped(post_analysis, ticker, direction, opt_list)
+            alignments.append(alert)
+            self.dispatch_alert(alert, level="RED")
+            
         return alignments
 
-    def process_new_option_anomaly(self, opt_anomaly):
+    def process_new_anomalies_grouped(self, new_anomalies):
         """
-        Saves a new option anomaly, logs to SQLite, and checks for matching posts in history.
-        If no post matches but the score is exceptionally high, triggers a YELLOW alert.
+        Processes a list of new option anomalies, groups them by (ticker, direction),
+        and aligns them with post history to send consolidated alerts.
         """
-        self.option_history.append(opt_anomaly)
+        for opt in new_anomalies:
+            self.option_history.append(opt)
         self._clean_expired_history()
         
-        # TSADS v2.0: Log option anomaly to SQLite
-        self.db_logger.log_option(opt_anomaly)
-        
-        ticker = opt_anomaly["ticker"]
-        score = opt_anomaly["anomaly_score"]
-        direction = opt_anomaly["direction"]
-        
-        print(f"[TSADS Engine] Processed Option Anomaly. Ticker: {ticker} | Score: {score} | Direction: {direction}")
-        
-        # Look for matching posts in history
-        matched = False
-        for post in self.post_history:
-            if self._are_aligned(post, opt_anomaly):
-                alert = self._create_aligned_alert(post, opt_anomaly)
-                self.dispatch_alert(alert, level="RED")
-                matched = True
-                return alert
-                
-        if not matched:
-            # Check if standalone anomaly score is high (e.g. >= 9.0)
-            if score >= 9.0:
-                alert = self._create_standalone_alert(opt_anomaly)
-                self.dispatch_alert(alert, level="YELLOW")
-                return alert
-        return None
+        # Log all to DB
+        for opt in new_anomalies:
+            self.db_logger.log_option(opt)
+            
+        # Group by (ticker, direction)
+        groups = {}
+        for opt in new_anomalies:
+            key = (opt["ticker"].upper(), opt["direction"].upper())
+            if key not in groups:
+                groups[key] = []
+            groups[key].append(opt)
+            
+        alerts = []
+        for (ticker, direction), opt_list in groups.items():
+            matched = False
+            for post in self.post_history:
+                if self._are_aligned(post, opt_list[0]):
+                    alert = self._create_aligned_alert_grouped(post, ticker, direction, opt_list)
+                    self.dispatch_alert(alert, level="RED")
+                    alerts.append(alert)
+                    matched = True
+                    break
+            
+            if not matched:
+                # Check if any option in the list has score >= 9.0
+                high_score_opts = [o for o in opt_list if o["anomaly_score"] >= 9.0]
+                if high_score_opts:
+                    alert = self._create_standalone_alert_grouped(ticker, direction, high_score_opts)
+                    self.dispatch_alert(alert, level="YELLOW")
+                    alerts.append(alert)
+        return alerts
 
     def _are_aligned(self, post, opt):
         """
@@ -120,7 +134,7 @@ class AlertAlignmentEngine:
         """
         # Time check
         post_time = datetime.fromisoformat(post["timestamp"])
-        opt_time = datetime.now() # Simulated current time
+        opt_time = datetime.fromisoformat(opt["timestamp"])
         
         time_diff = abs((opt_time - post_time).total_seconds()) / 60.0
         if time_diff > self.alignment_window_minutes:
@@ -131,10 +145,6 @@ class AlertAlignmentEngine:
         opt_dir = opt.get("direction", "NONE")
         if post_dir != opt_dir:
             return False
-            
-        # DJT (Trump concept stock) directly aligns with any market-impacting Trump post if direction matches
-        if opt["ticker"].upper() == "DJT":
-            return True
             
         # Sector check
         opt_sectors = self.map_ticker_to_sectors(opt["ticker"])
@@ -169,31 +179,27 @@ class AlertAlignmentEngine:
             if datetime.fromisoformat(p["timestamp"]) > threshold_time
         ]
 
-    def _create_aligned_alert(self, post, opt):
+    def _create_aligned_alert_grouped(self, post, ticker, direction, opt_list):
         """
         Combines post metadata and option metadata into a structured RED Alert with Greeks hedging.
-        Checks for TLT (Bond) resonance as a signal boost.
         """
-        ticker = opt["ticker"]
-        direction = opt["direction"]
-        score = opt["anomaly_score"]
+        max_score = max(o["anomaly_score"] for o in opt_list)
+        total_premium = sum(o["premium"] for o in opt_list)
+        avg_vol_oi = sum(o["vol_oi_ratio"] for o in opt_list) / len(opt_list)
+        avg_dte = sum(o["dte"] for o in opt_list) / len(opt_list)
         
-        # TSADS v2.1: Check for TLT (Bond) resonance if we are processing SPY/QQQ
         has_tlt_resonance = False
         tlt_msg = ""
-        if ticker.upper() in ["SPY", "QQQ"]:
+        if ticker in ["SPY", "QQQ"]:
             for hist_opt in self.option_history:
-                # If TLT has an anomaly in the same direction recently (within window)
                 if hist_opt["ticker"].upper() == "TLT" and hist_opt["direction"] == direction:
                     has_tlt_resonance = True
                     tlt_msg = f"【美債共振提醒】偵測到美債 TLT 期權同步出現 {direction} 異常流，債市同步押注政策預期，訊號可信度加分！"
                     break
         
-        # Dynamic position (boosted if TLT resonance exists) and Greeks hedging spreads calculation
-        pos_info = self.pos_manager.calculate_position_size(score, has_resonance=has_tlt_resonance)
+        pos_info = self.pos_manager.calculate_position_size(max_score, has_resonance=has_tlt_resonance)
         
-        # Assume an estimated spot price for spread strike calculations
-        spot_prices = {"SPY": 500.0, "QQQ": 400.0, "DJT": 50.0, "TLT": 95.0, "GLD": 220.0}
+        spot_prices = {"SPY": 500.0, "QQQ": 400.0, "TLT": 95.0, "GLD": 220.0, "USO": 75.0}
         spot = spot_prices.get(ticker, 100.0)
         spread_info = self.pos_manager.generate_spread_recommendation(ticker, direction, current_price=spot)
         
@@ -201,17 +207,27 @@ class AlertAlignmentEngine:
         if has_tlt_resonance:
             reason += " 且觀測到美債 TLT 同步共振！"
             
+        contracts_desc = []
+        for o in opt_list:
+            contracts_desc.append(f"• {o['contract']} (Vol/OI: {o['vol_oi_ratio']}x, 規模: ${o['premium']:,}, DTE: {o['dte']})")
+        contracts_text = "\n".join(contracts_desc)
+        
         alert = {
-            "alert_id": f"ALERT_RED_{int(datetime.now().timestamp())}",
+            "alert_id": f"ALERT_RED_{int(datetime.now().timestamp())}_{ticker}_{direction}",
             "level": "RED",
             "timestamp": datetime.now().isoformat(),
             "ticker": ticker,
-            "contract": opt["contract"],
+            "contract": ", ".join(o["contract"] for o in opt_list),
+            "contracts_detail": contracts_text,
             "action": direction,
-            "vol_oi_ratio": opt["vol_oi_ratio"],
-            "premium": opt["premium"],
-            "dte": opt["dte"],
+            "vol_oi_ratio": round(avg_vol_oi, 2),
+            "premium": total_premium,
+            "dte": int(round(avg_dte)),
             "source_post": post["text"],
+            "source_link": post.get("link", ""),
+            "confidence": post.get("confidence", 0.0),
+            "sentiment": post.get("sentiment", "NEUTRAL"),
+            "sectors": post.get("sectors", []),
             "reason": reason,
             "trading_guideline": f"【跟單建議】買入 {spread_info['strategy']}。買入 Strike {spread_info['buy_strike']} / 賣出 Strike {spread_info['sell_strike']}。執行限價單，且進場後 45-60 分鐘內不論盈虧強制平倉。",
             "allocated_dollars": pos_info["allocated_dollars"],
@@ -219,38 +235,48 @@ class AlertAlignmentEngine:
             "buy_strike": float(spread_info["buy_strike"]),
             "sell_strike": float(spread_info["sell_strike"]),
             "hedging_reason": spread_info["greeks_hedging_reason"],
-            "tlt_resonance_msg": tlt_msg # v2.1 warning note
+            "tlt_resonance_msg": tlt_msg
         }
         
-        # TSADS v2.0: Log alert to SQLite db
         self.db_logger.log_alert(alert)
         return alert
 
-    def _create_standalone_alert(self, opt):
+    def _create_standalone_alert_grouped(self, ticker, direction, opt_list):
         """
         Creates a structured YELLOW Alert for standalone high-score anomalies.
         """
-        ticker = opt["ticker"]
-        direction = opt["direction"]
-        score = opt["anomaly_score"]
+        max_score = max(o["anomaly_score"] for o in opt_list)
+        total_premium = sum(o["premium"] for o in opt_list)
+        avg_vol_oi = sum(o["vol_oi_ratio"] for o in opt_list) / len(opt_list)
+        avg_dte = sum(o["dte"] for o in opt_list) / len(opt_list)
         
-        pos_info = self.pos_manager.calculate_position_size(score, has_resonance=False)
-        spot_prices = {"SPY": 500.0, "QQQ": 400.0, "DJT": 50.0, "TLT": 95.0, "GLD": 220.0}
+        pos_info = self.pos_manager.calculate_position_size(max_score, has_resonance=False)
+        spot_prices = {"SPY": 500.0, "QQQ": 400.0, "TLT": 95.0, "GLD": 220.0, "USO": 75.0}
         spot = spot_prices.get(ticker, 100.0)
         spread_info = self.pos_manager.generate_spread_recommendation(ticker, direction, current_price=spot)
         
+        contracts_desc = []
+        for o in opt_list:
+            contracts_desc.append(f"• {o['contract']} (Vol/OI: {o['vol_oi_ratio']}x, 規模: ${o['premium']:,}, DTE: {o['dte']})")
+        contracts_text = "\n".join(contracts_desc)
+        
         alert = {
-            "alert_id": f"ALERT_YELLOW_{int(datetime.now().timestamp())}",
+            "alert_id": f"ALERT_YELLOW_{int(datetime.now().timestamp())}_{ticker}_{direction}",
             "level": "YELLOW",
             "timestamp": datetime.now().isoformat(),
             "ticker": ticker,
-            "contract": opt["contract"],
+            "contract": ", ".join(o["contract"] for o in opt_list),
+            "contracts_detail": contracts_text,
             "action": direction,
-            "vol_oi_ratio": opt["vol_oi_ratio"],
-            "premium": opt["premium"],
-            "dte": opt["dte"],
+            "vol_oi_ratio": round(avg_vol_oi, 2),
+            "premium": total_premium,
+            "dte": int(round(avg_dte)),
             "source_post": "N/A (無近期對齊貼文，可能是提前洩露或市場噪音)",
-            "reason": f"市場期權流在 {ticker} 出現非典型 {direction} 掃單，異常分數高達 {score}，尚未觀測到發言對齊。",
+            "source_link": "",
+            "confidence": 0.0,
+            "sentiment": "N/A",
+            "sectors": [],
+            "reason": f"市場期權流在 {ticker} 出現非典型 {direction} 掃單，異常分數高達 {max_score}，尚未觀測到發言對齊。",
             "trading_guideline": f"【觀望建議】建立防守型 {spread_info['strategy']}。買入 Strike {spread_info['buy_strike']} / 賣出 Strike {spread_info['sell_strike']}。控制總倉位在 {pos_info['allocated_percent']}% 內，設好嚴格停損。",
             "allocated_dollars": pos_info["allocated_dollars"],
             "allocated_percent": pos_info["allocated_percent"],
@@ -260,55 +286,72 @@ class AlertAlignmentEngine:
             "tlt_resonance_msg": ""
         }
         
-        # TSADS v2.0: Log alert to SQLite db
         self.db_logger.log_alert(alert)
         return alert
 
     def dispatch_alert(self, alert, level="RED"):
         """
-        Dispatches alert to Telegram and outputs formatted console log.
+        Dispatches alert to Telegram using HTML parsing.
         """
-        emoji = "🔴 [TSADS RED ALERT] 雙重對齊警報" if level == "RED" else "🟡 [TSADS YELLOW ALERT] 前置期權異常"
+        emoji = "🔴 <b>[TSADS RED ALERT] 雙重對齊警報</b>" if level == "RED" else "🟡 <b>[TSADS YELLOW ALERT] 前置期權異常</b>"
         
-        # Build extra Bond resonance line if active
+        # Check for macro tags in the source post
+        post_text = alert.get("source_post", "").lower()
+        tags = []
+        if any(w in post_text for w in ["war", "conflict", "military", "defense", "forces", "strike", "hit", "伊朗", "戰爭", "軍事", "國防", "打擊"]):
+            tags.append("🚨 戰爭地緣")
+        if any(w in post_text for w in ["tariff", "tariffs", "trade war", "sanctions", "china", "chinese", "關稅", "貿易戰", "制裁", "中國"]):
+            tags.append("⚠️ 貿易戰/關稅")
+        if any(w in post_text for w in ["rate", "rates", "interest", "inflation", "fed", "yield", "cpi", "利率", "通膨", "美聯儲", "降息", "升息"]):
+            tags.append("📊 利率/通膨/Fed")
+        if any(w in post_text for w in ["invest", "equity", "stake", "merger", "acquisition", "buy", "入股", "投資", "併購", "股權"]):
+            tags.append("💰 入股/投資/併購")
+
+        tags_part = ""
+        if tags:
+            tags_part = f"\n<b>■ 宏觀標籤</b>: " + " | ".join(f"<code>{t}</code>" for t in tags) + "\n"
+            
         tlt_part = ""
         if alert.get("tlt_resonance_msg"):
-            tlt_part = f"\n■ 債市指標: {alert['tlt_resonance_msg']}\n"
+            tlt_part = f"\n<b>■ 債市指標</b>: {alert['tlt_resonance_msg']}\n"
             
+        link_part = ""
+        if alert.get("source_link"):
+            link_part = f'\n<b>■ 貼文連結</b>: <a href="{alert["source_link"]}">點擊查看 Truth Social 原文</a>'
+            
+        escaped_post = html.escape(alert.get("source_post", "N/A"))
+        
         msg = f"""
 {emoji}
-━━━━━━━━━━━━━━━━━━
-■ 交易標的: {alert['ticker']} ({alert['action']})
-■ 合約名稱: {alert['contract']}
-■ 異常倍數: Vol/OI {alert['vol_oi_ratio']}x | 規模: ${alert['premium']:,} (DTE: {alert['dte']}){tlt_part}
-■ 建議倉位: {alert['allocated_percent']}% (${alert['allocated_dollars']:,} USD)
-■ 對沖策略: 建立 {alert['buy_strike']} / {alert['sell_strike']} 垂直價差
-■ 避險理由: {alert.get('hedging_reason', '')}
-■ 警報原因: {alert['reason']}
-■ 實戰建議: {alert['trading_guideline']}
+━━━━━━━━━━━━━━━━━━{tags_part}
+<b>■ 交易標的</b>: {alert['ticker']} ({alert['action']})
+<b>■ 異常合約</b>:
+{alert.get('contracts_detail', alert['contract'])}
+
+<b>■ 合計規模</b>: 均 Vol/OI {alert['vol_oi_ratio']}x | 總額: ${alert['premium']:,} (均 DTE: {alert['dte']}){tlt_part}
+<b>■ 建議倉位</b>: {alert['allocated_percent']}% (${alert['allocated_dollars']:,} USD)
+<b>■ 對沖策略</b>: 建立 {alert['buy_strike']} / {alert['sell_strike']} 垂直價差
+<b>■ 避險理由</b>: {alert.get('hedging_reason', '')}
+<b>■ 警報原因</b>: {alert['reason']}
+<b>■ 川普發言</b>: <i>"{escaped_post}"</i>{link_part}
+<b>■ 實戰建議</b>: {alert['trading_guideline']}
 ━━━━━━━━━━━━━━━━━━
 """
+        
         try:
             print(msg)
-        except UnicodeEncodeError:
-            # Fallback for environments CP950 console without UTF-8 reconfigure
-            clean_msg = msg.replace("🔴", "[RED]").replace("🟡", "[YELLOW]")
-            clean_msg = clean_msg.replace("━━━━━━━━━━━━━━━━━━", "----------------------------------")
-            clean_msg = clean_msg.replace("■", "-")
-            try:
-                enc = sys.stdout.encoding or 'ascii'
-                print(clean_msg.encode(enc, errors='replace').decode(enc))
-            except Exception:
-                print(f"[{level} ALERT] {alert['ticker']} {alert['action']} - Premium: ${alert['premium']:,} - DTE: {alert['dte']}")
+        except Exception:
+            print(f"[{level} ALERT] {alert['ticker']} {alert['action']} - Premium: ${alert['premium']:,}")
         
-        # Send via Telegram API if configured
+        # Send via Telegram API
         if self.tg_token and self.tg_chat_id:
             try:
                 tg_url = f"https://api.telegram.org/bot{self.tg_token}/sendMessage"
                 data = urllib.parse.urlencode({
                     "chat_id": self.tg_chat_id,
                     "text": msg,
-                    "parse_mode": "Markdown"
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": "true"
                 }).encode("utf-8")
                 
                 req = urllib.request.Request(tg_url, data=data)
@@ -324,27 +367,41 @@ if __name__ == "__main__":
     
     mock_post = {
         "id": "test_post_999",
-        "text": "Cars are bad!",
+        "text": "Trade war with China will happen! New tariffs of 50%!",
         "timestamp": datetime.now().isoformat(),
         "has_impact": True,
-        "sectors": ["Automotive"],
+        "sectors": ["China-Exposure"],
         "sentiment": "NEGATIVE",
         "trading_direction": "PUT",
-        "confidence": 0.9
-    }
-    mock_option = {
-        "ticker": "SPY",
-        "contract": "SPY 260615P00500000",
-        "premium": 4800000.0,
-        "vol_oi_ratio": 4.5,
-        "dte": 1,
-        "direction": "PUT",
-        "anomaly_score": 10.5,
-        "is_anomaly": True
+        "confidence": 0.9,
+        "link": "https://truthsocial.com/realDonaldTrump/12345"
     }
     
+    mock_anomalies = [
+        {
+            "ticker": "SPY",
+            "contract": "SPY 260615P00500000",
+            "premium": 4800000.0,
+            "vol_oi_ratio": 4.5,
+            "dte": 1,
+            "direction": "PUT",
+            "anomaly_score": 10.5,
+            "timestamp": datetime.now().isoformat()
+        },
+        {
+            "ticker": "SPY",
+            "contract": "SPY 260615P00510000",
+            "premium": 2500000.0,
+            "vol_oi_ratio": 3.2,
+            "dte": 1,
+            "direction": "PUT",
+            "anomaly_score": 9.5,
+            "timestamp": datetime.now().isoformat()
+        }
+    ]
+    
     engine.process_new_post(mock_post)
-    engine.process_new_option_anomaly(mock_option)
+    engine.process_new_anomalies_grouped(mock_anomalies)
     
     if os.path.exists("tsads_test.db"):
         os.remove("tsads_test.db")
